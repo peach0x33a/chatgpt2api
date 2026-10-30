@@ -281,7 +281,16 @@ def delete_to_target(target_free_mb: int, dry_run: bool = False) -> dict:
     usage = shutil.disk_usage(config.images_dir)
     current_free = usage.free // (1024 * 1024)
     if current_free >= target_free_mb and not dry_run:
-        return {"removed": 0, "current_free_mb": current_free, "target_free_mb": target_free_mb, "done": True}
+        # 提前返回也必须给齐字段：调用方依赖 freed_mb 展示结果，
+        # 缺字段会让前端在「无需清理」这个正常场景下报错。
+        return {
+            "removed": 0,
+            "freed_mb": 0,
+            "current_free_mb": current_free,
+            "target_free_mb": target_free_mb,
+            "done": True,
+            "dry_run": dry_run,
+        }
 
     files = sorted(
         (p for p in config.images_dir.rglob("*.png") if p.is_file()),

@@ -842,14 +842,27 @@ def stream_image_outputs(
         total: int = 1,
 ) -> Iterator[ImageOutput]:
     last: dict[str, Any] = {}
-    for event in conversation_events(
-            backend,
-            prompt=request.prompt,
-            model=request.model,
-            images=request.images or [],
-            size=request.size,
-            quality=request.quality,
-    ):
+    stream = conversation_events(
+        backend,
+        prompt=request.prompt,
+        model=request.model,
+        images=request.images or [],
+        size=request.size,
+        quality=request.quality,
+    )
+    while True:
+        try:
+            event = next(stream)
+        except StopIteration:
+            break
+        except Exception as exc:
+            # SSE 被硬上限中断时，会话 ID 往往已经拿到。把它挂到异常上，
+            # 上层才能提供「继续等待」而不是让用户重新生成。
+            if not getattr(exc, "conversation_id", ""):
+                captured = str(last.get("conversation_id") or "")
+                if captured:
+                    setattr(exc, "conversation_id", captured)
+            raise
         last = event
         if event.get("type") == "conversation.delta":
             yield ImageOutput(

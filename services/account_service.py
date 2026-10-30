@@ -32,7 +32,11 @@ class AccountService:
     _REFRESH_TOKEN_KEEPALIVE_BATCH_SIZE = 3
     _TOKEN_REFRESH_ERROR_BACKOFF_SECONDS = 5 * 60
     _OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
-    _OAUTH_CLIENT_ID = "app_2SKx67EdpoN0G6j64rFvigXD"
+    # Codex CLI 的公开 client_id。本项目账号多来自 Codex 导出，其 refresh_token
+    # 绑定这个 client；用错 client 会被上游拒绝为 invalid_client。
+    _OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+    # 兼容旧账号：早期用另一个 client_id 换取的 refresh_token 需要它。
+    _LEGACY_OAUTH_CLIENT_IDS = ("app_2SKx67EdpoN0G6j64rFvigXD",)
     _OAUTH_USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -358,32 +362,46 @@ class AccountService:
 
         session = requests.Session(**proxy_settings.build_session_kwargs(account=account, impersonate="chrome110", verify=True))
         try:
-            response = session.post(
-                self._OAUTH_TOKEN_URL,
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": self._OAUTH_USER_AGENT,
-                },
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": self._OAUTH_CLIENT_ID,
-                },
-                timeout=60,
-            )
-            data = response.json() if response.text else {}
-            if response.status_code != 200 or not isinstance(data, dict) or not data.get("access_token"):
+            # 依次尝试主 client_id 与历史 client_id：
+            # 账号可能由不同客户端导出，其 refresh_token 绑定的 client 不一样。
+            # 只认一个 client_id 会让另一批账号永远刷不出来。
+            last_error = ""
+            for client_id in (self._OAUTH_CLIENT_ID, *self._LEGACY_OAUTH_CLIENT_IDS):
+                response = session.post(
+                    self._OAUTH_TOKEN_URL,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "User-Agent": self._OAUTH_USER_AGENT,
+                    },
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "client_id": client_id,
+                    },
+                    timeout=60,
+                )
+                data = response.json() if response.text else {}
+                if response.status_code == 200 and isinstance(data, dict) and data.get("access_token"):
+                    return {
+                        "access_token": str(data.get("access_token") or "").strip(),
+                        "refresh_token": str(data.get("refresh_token") or refresh_token).strip(),
+                        "id_token": str(data.get("id_token") or "").strip(),
+                    }
                 detail = ""
                 if isinstance(data, dict):
                     detail = str(data.get("error_description") or data.get("error") or data.get("message") or "")
+                    if not detail:
+                        nested = data.get("error")
+                        if isinstance(nested, dict):
+                            detail = str(nested.get("message") or nested.get("code") or "")
                 detail = detail or self._safe_response_text(response)
-                raise RuntimeError(f"oauth_refresh_http_{response.status_code}{': ' + detail if detail else ''}")
-            return {
-                "access_token": str(data.get("access_token") or "").strip(),
-                "refresh_token": str(data.get("refresh_token") or refresh_token).strip(),
-                "id_token": str(data.get("id_token") or "").strip(),
-            }
+                last_error = f"oauth_refresh_http_{response.status_code}{': ' + detail if detail else ''}"
+                # invalid_client 说明这个 client 与 RT 不匹配，换下一个继续尝试；
+                # 其他错误（如 RT 已失效）换 client 也不会成功，直接抛出。
+                if "invalid_client" not in detail.lower():
+                    raise RuntimeError(last_error)
+            raise RuntimeError(last_error or "oauth_refresh_failed")
         finally:
             session.close()
 
@@ -935,8 +953,12 @@ class AccountService:
                     )
                 tokens = self._list_available_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types)
                 if tokens:
-                    access_token = tokens[self._index % len(tokens)]
-                    self._index += 1
+                    if config.image_account_schedule_mode == "sequential":
+                        # 顺序调度：始终优先使用列表靠前的账号，额度用尽或被排除后才轮到下一个。
+                        access_token = tokens[0]
+                    else:
+                        access_token = tokens[self._index % len(tokens)]
+                        self._index += 1
                     self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
                     return access_token
                 self._image_slot_condition.wait(timeout=1.0)
@@ -1111,11 +1133,13 @@ class AccountService:
         if not isinstance(item, dict):
             return None
         access_token = AccountService._account_payload_token(item)
-        if not access_token:
+        # 只有 refresh_token 的条目也要保留：后续会用 RT 现换 AT。
+        if not access_token and not str(item.get("refresh_token") or "").strip():
             return None
         payload = dict(item)
         payload.pop("accessToken", None)
-        payload["access_token"] = access_token
+        if access_token:
+            payload["access_token"] = access_token
         # CPA/Codex 导出文件里的 `type=codex` 是导出格式，不是号池套餐类型。
         if str(payload.get("type") or "").strip().lower() == "codex":
             payload["export_type"] = "codex"
@@ -1127,13 +1151,72 @@ class AccountService:
             payload["type"] = str(payload.get("plan_type") or "").strip()
         return payload
 
+    def _resolve_refresh_token_payload(self, payload: dict) -> tuple[dict | None, str]:
+        """把「只有 refresh_token」的导入项换成带 access_token 的真实账号。
+
+        原实现要求必须有 access_token，导致只能拿到 RT 的导出文件无法导入。
+        这里先用 RT 向 OpenAI 换取 AT，再走正常的入库流程：
+        - 换取成功：拿到 AT 与（可能轮换的）RT，一并写入。
+        - 换取失败：把错误原文返回给调用方，让用户知道是 RT 失效还是网络问题。
+        """
+        refresh_token = str(payload.get("refresh_token") or "").strip()
+        if not refresh_token:
+            return None, "missing refresh_token"
+
+        try:
+            token_data = self._request_access_token_refresh(refresh_token, account=payload)
+        except Exception as exc:  # noqa: BLE001 - 原文透出给调用方做诊断
+            return None, str(exc) or "refresh_token exchange failed"
+
+        access_token = str(token_data.get("access_token") or "").strip()
+        if not access_token:
+            return None, "refresh_token exchange returned no access_token"
+
+        resolved = dict(payload)
+        resolved["access_token"] = access_token
+        # RT 可能轮换，优先用新的。
+        resolved["refresh_token"] = str(token_data.get("refresh_token") or refresh_token).strip()
+        if token_data.get("id_token"):
+            resolved["id_token"] = str(token_data.get("id_token") or "").strip()
+
+        # 用 AT 的 claims 补全邮箱等信息，避免列表里一片「未知」。
+        claims = self._decode_jwt_payload(access_token)
+        auth_claim = claims.get("https://api.openai.com/auth")
+        auth_claim = auth_claim if isinstance(auth_claim, dict) else {}
+        profile = claims.get("https://api.openai.com/profile")
+        profile = profile if isinstance(profile, dict) else {}
+        # 用 setdefault 不够：调用方常传空字符串占位，会把真实值挡掉。
+        if not str(resolved.get("email") or "").strip():
+            resolved["email"] = str(profile.get("email") or "").strip()
+        if not resolved.get("user_id"):
+            resolved["user_id"] = auth_claim.get("chatgpt_user_id") or claims.get("sub") or ""
+        if not resolved.get("type"):
+            plan = str(auth_claim.get("chatgpt_plan_type") or "").strip()
+            if plan:
+                resolved["type"] = plan
+        return resolved, ""
+
     def add_account_items(self, items: list[dict]) -> dict:
-        payloads = [
-            payload
-            for item in items
-            if (payload := self._prepare_account_payload(item)) is not None
-        ]
-        return self._add_account_payloads(payloads)
+        payloads: list[dict] = []
+        errors: list[dict] = []
+        for item in items:
+            payload = self._prepare_account_payload(item)
+            if payload is None:
+                continue
+            # 只有 RT 的条目需要先换 AT。
+            if not self._account_payload_token(payload) and payload.get("refresh_token"):
+                resolved, error = self._resolve_refresh_token_payload(payload)
+                if resolved is None:
+                    label = str(payload.get("email") or payload.get("name") or "refresh_token")
+                    errors.append({"access_token": label, "error": error})
+                    continue
+                payload = resolved
+            payloads.append(payload)
+
+        result = self._add_account_payloads(payloads)
+        if errors:
+            result["errors"] = [*(result.get("errors") or []), *errors]
+        return result
 
     def add_accounts(self, tokens: list[str], source_type: str = "web") -> dict:
         tokens = list(dict.fromkeys(token for token in tokens if token))

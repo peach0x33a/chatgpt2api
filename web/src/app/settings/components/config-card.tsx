@@ -26,6 +26,7 @@ export function ConfigCard() {
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setImagePollTimeoutSecs = useSettingsStore((state) => state.setImagePollTimeoutSecs);
   const setImageAccountConcurrency = useSettingsStore((state) => state.setImageAccountConcurrency);
+  const setImageAccountScheduleMode = useSettingsStore((state) => state.setImageAccountScheduleMode);
   const setImageSettleEnabled = useSettingsStore((state) => state.setImageSettleEnabled);
   const setImageRemoveConversationAfterResult = useSettingsStore((state) => state.setImageRemoveConversationAfterResult);
   const setImageRemoveConversationAlways = useSettingsStore((state) => state.setImageRemoveConversationAlways);
@@ -206,6 +207,24 @@ export function ConfigCard() {
               className="h-10 rounded-xl border-stone-200 bg-white"
             />
             <p className="text-xs text-stone-500">限制每个账号同时处理的图片请求数量，默认 3。</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-stone-700">账号调度</label>
+            <Select
+              value={config?.image_account_schedule_mode === "sequential" ? "sequential" : "round_robin"}
+              onValueChange={(value) => setImageAccountScheduleMode(value as "round_robin" | "sequential")}
+            >
+              <SelectTrigger className="h-10 rounded-xl border-stone-200 bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="round_robin">轮询</SelectItem>
+                <SelectItem value="sequential">顺序</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-stone-500">
+              轮询：请求依次分散到号池各账号；顺序：先用靠前的账号，额度用尽或并发占满后再用后面的。
+            </p>
           </div>
           <div className="space-y-2">
             <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">

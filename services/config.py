@@ -82,6 +82,12 @@ DEFAULT_THIRD_PARTY_APPS = {
     },
 }
 
+# 图片账号调度方式：
+# - round_robin：每次取下一个账号，请求分散到整个号池
+# - sequential：始终优先用列表靠前的账号，额度用尽或不可用后才用后面的
+DEFAULT_IMAGE_ACCOUNT_SCHEDULE_MODE = "round_robin"
+IMAGE_ACCOUNT_SCHEDULE_MODES = {"round_robin", "sequential"}
+
 
 def _normalize_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, str):
@@ -94,6 +100,11 @@ def _normalize_bool(value: object, default: bool = False) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def _normalize_image_account_schedule_mode(value: object) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    return normalized if normalized in IMAGE_ACCOUNT_SCHEDULE_MODES else DEFAULT_IMAGE_ACCOUNT_SCHEDULE_MODE
 
 
 def _normalize_positive_int(value: object, default: int, minimum: int = 0) -> int:
@@ -423,6 +434,11 @@ class ConfigStore:
             return 3
 
     @property
+    def image_account_schedule_mode(self) -> str:
+        """图片账号调度方式：round_robin 轮询，sequential 顺序。"""
+        return _normalize_image_account_schedule_mode(self.data.get("image_account_schedule_mode"))
+
+    @property
     def image_parallel_generation(self) -> bool:
         value = self.data.get("image_parallel_generation", True)
         if isinstance(value, str):
@@ -568,6 +584,7 @@ class ConfigStore:
         data["image_poll_interval_secs"] = self.image_poll_interval_secs
         data["image_poll_initial_wait_secs"] = self.image_poll_initial_wait_secs
         data["image_account_concurrency"] = self.image_account_concurrency
+        data["image_account_schedule_mode"] = self.image_account_schedule_mode
         data["image_parallel_generation"] = self.image_parallel_generation
         data["image_remove_conversation_after_result"] = self.image_remove_conversation_after_result
         data["image_remove_conversation_always"] = self.image_remove_conversation_always
@@ -617,6 +634,10 @@ class ConfigStore:
         if "image_storage" in next_data:
             next_data["image_storage"] = _normalize_image_storage_settings(next_data.get("image_storage"))
             _validate_image_storage_settings(next_data["image_storage"])
+        if "image_account_schedule_mode" in next_data:
+            next_data["image_account_schedule_mode"] = _normalize_image_account_schedule_mode(
+                next_data.get("image_account_schedule_mode")
+            )
         if "chat_completion_cache" in next_data:
             next_data["chat_completion_cache"] = _normalize_chat_completion_cache_settings(
                 next_data.get("chat_completion_cache")

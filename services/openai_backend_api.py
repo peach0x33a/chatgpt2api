@@ -51,8 +51,15 @@ class ImageContentPolicyError(ImageTaskError):
 
 
 class ImageStreamHardTimeoutError(RuntimeError):
-    """图片 SSE 流读取超过硬上限时抛出，用于快速中断被挂起的长连接。"""
-    pass
+    """图片 SSE 流读取超过硬上限时抛出，用于快速中断被挂起的长连接。
+
+    conversation_id 在流被中断前可能已经捕获，保留它才能让上层提供
+    「继续等待」——图片很可能仍在上游异步生成中。
+    """
+
+    def __init__(self, message: str = "", conversation_id: str = "") -> None:
+        super().__init__(message)
+        self.conversation_id = conversation_id
 
 
 @dataclass
