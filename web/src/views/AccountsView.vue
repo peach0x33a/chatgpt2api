@@ -182,9 +182,9 @@ async function doDelete() {
     }
     try {
         const result = await deleteAccounts(targets);
-        accounts.value = result.items;
         selected.value = new Set();
         toast.success(`已删除 ${result.removed ?? targets.length} 个`);
+        await load();
     } catch (error) {
         toast.error(error instanceof Error ? error.message : "删除失败");
     }
@@ -390,7 +390,7 @@ async function doDelete() {
         <ImportDialog v-model:open="importOpen" @imported="load" />
         <AccountEditDialog
             v-model:account="editingAccount"
-            @saved="(items) => (accounts = items)"
+            @saved="load"
         />
     </div>
 </template>

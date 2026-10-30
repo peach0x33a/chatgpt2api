@@ -51,14 +51,28 @@ export type AccountImportPayload = {
     [key: string]: unknown;
 };
 
+/** 写操作只返回账号摘要，不含任何凭证。 */
+export type AccountSummary = {
+    email?: string | null;
+    type: AccountType;
+    status: AccountStatus;
+    quota: number;
+};
+
 export type AccountMutationResponse = {
-    items: Account[];
     added?: number;
     skipped?: number;
     removed?: number;
     refreshed?: number;
     relogined?: number;
-    errors?: Array<{ access_token: string; error: string }>;
+    errors?: Array<{ access_token?: string; token?: string; error: string }>;
+    accounts?: AccountSummary[];
+};
+
+export type AccountMutationResult = {
+    refreshed?: number;
+    relogined?: number;
+    errors?: Array<{ token?: string; error: string }>;
 };
 
 export type RefreshProgressResponse = {
@@ -68,7 +82,7 @@ export type RefreshProgressResponse = {
     error: string | null;
     status_counts?: Record<string, number>;
     total_quota?: number;
-    result?: AccountMutationResponse | null;
+    result?: AccountMutationResult | null;
     results?: Array<{ token: string; status: string; error?: string | null }>;
 };
 
@@ -100,7 +114,7 @@ export async function createAccounts(tokens: string[], accounts: AccountImportPa
 }
 
 export async function deleteAccounts(tokens: string[]) {
-    return httpRequest<AccountMutationResponse>("/api/accounts", {
+    return httpRequest<{ removed: number }>("/api/accounts", {
         method: "DELETE",
         body: { tokens },
     });
@@ -110,7 +124,7 @@ export async function updateAccount(
     accessToken: string,
     updates: { type?: AccountType; status?: AccountStatus; quota?: number; proxy?: string },
 ) {
-    return httpRequest<{ item: Account; items: Account[] }>("/api/accounts/update", {
+    return httpRequest<{ account: AccountSummary }>("/api/accounts/update", {
         method: "POST",
         body: { access_token: accessToken, ...updates },
     });

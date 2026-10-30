@@ -11,7 +11,7 @@ import { useToast } from "@/lib/toast";
 const props = defineProps<{ account: Account | null }>();
 const emit = defineEmits<{
     "update:account": [Account | null];
-    saved: [Account[]];
+    saved: [];
 }>();
 
 const toast = useToast();
@@ -99,9 +99,9 @@ async function save() {
         if (proxy.value.trim() !== (account.proxy || "")) {
             updates.proxy = proxy.value.trim();
         }
-        const result = await updateAccount(account.access_token, updates);
+        await updateAccount(account.access_token, updates);
         toast.success("账号已更新");
-        emit("saved", result.items);
+        emit("saved");
         emit("update:account", null);
     } catch (error) {
         toast.error(error instanceof Error ? error.message : "保存失败");

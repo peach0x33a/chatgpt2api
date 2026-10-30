@@ -128,6 +128,15 @@ def _unique_tokens(tokens: list[str]) -> list[str]:
     return list(dict.fromkeys(str(token or "").strip() for token in tokens if str(token or "").strip()))
 
 
+def _sanitize_progress(progress: dict[str, Any]) -> dict[str, Any]:
+    """进度结果只保留计数与错误，去掉整池账号明细。"""
+    clean = dict(progress)
+    result = clean.get("result")
+    if isinstance(result, dict):
+        clean["result"] = {key: value for key, value in result.items() if key != "items"}
+    return clean
+
+
 def _download_timestamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -231,11 +240,13 @@ def create_router() -> APIRouter:
         else:
             result = account_service.add_accounts(tokens)
         refresh_result = account_service.refresh_accounts(tokens)
+        # 只返回本次涉及账号的摘要（档位/额度/状态），不回传整池明文凭证。
         return {
-            **result,
+            "added": int(result.get("added") or 0),
+            "skipped": int(result.get("skipped") or 0),
             "refreshed": refresh_result.get("refreshed", 0),
-            "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", result.get("items", [])),
+            "errors": [*(result.get("errors") or []), *(refresh_result.get("errors") or [])],
+            "accounts": account_service.summarize_tokens(tokens),
         }
 
     @router.delete("/api/accounts")
@@ -244,7 +255,8 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        return account_service.delete_accounts(tokens)
+        result = account_service.delete_accounts(tokens)
+        return {"removed": int(result.get("removed") or 0)}
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
@@ -273,7 +285,7 @@ def create_router() -> APIRouter:
         progress = account_service.get_refresh_progress(progress_id)
         if progress is None:
             raise HTTPException(status_code=404, detail={"error": "progress not found"})
-        return progress
+        return _sanitize_progress(progress)
 
     @router.post("/api/accounts/re-login")
     async def re_login_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
@@ -301,7 +313,7 @@ def create_router() -> APIRouter:
         progress = account_service.get_relogin_progress(progress_id)
         if progress is None:
             raise HTTPException(status_code=404, detail={"error": "progress not found"})
-        return progress
+        return _sanitize_progress(progress)
 
     @router.post("/api/accounts/export")
     async def export_accounts(body: AccountExportRequest, authorization: str | None = Header(default=None)):
@@ -342,7 +354,7 @@ def create_router() -> APIRouter:
         account = account_service.update_account(access_token, updates)
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
-        return {"item": account, "items": account_service.list_accounts()}
+        return {"account": account_service.account_summary(account)}
 
     @router.post("/api/accounts/oauth/start")
     async def start_oauth_login(
@@ -387,10 +399,11 @@ def create_router() -> APIRouter:
             account_service.refresh_accounts, [tokens["access_token"]]
         )
         return {
-            **add_result,
+            "added": int(add_result.get("added") or 0),
+            "skipped": int(add_result.get("skipped") or 0),
             "refreshed": refresh_result.get("refreshed", 0),
-            "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", add_result.get("items", [])),
+            "errors": [*(add_result.get("errors") or []), *(refresh_result.get("errors") or [])],
+            "accounts": account_service.summarize_tokens([tokens["access_token"]]),
         }
 
     @router.get("/api/cpa/pools")

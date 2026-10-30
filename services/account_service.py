@@ -1091,6 +1091,27 @@ class AccountService:
             account = self._accounts.get(access_token)
             return dict(account) if account else None
 
+    @classmethod
+    def account_summary(cls, account: dict | None) -> dict | None:
+        """把账号裁剪成可安全对外返回的摘要（档位/额度/状态），不含任何凭证。"""
+        if not isinstance(account, dict):
+            return None
+        return {
+            "email": account.get("email"),
+            "type": account.get("type"),
+            "status": account.get("status"),
+            "quota": max(0, int(account.get("quota") or 0)),
+        }
+
+    def summarize_tokens(self, access_tokens: list[str]) -> list[dict]:
+        """按 token 顺序返回账号摘要；token 已失效或不存在时跳过。"""
+        summaries: list[dict] = []
+        for token in access_tokens:
+            summary = self.account_summary(self.get_account(token))
+            if summary is not None:
+                summaries.append(summary)
+        return summaries
+
     def list_accounts(self) -> list[dict]:
         """返回所有账号的副本，并为每个账号附加当前图片在途数 image_inflight。
 
