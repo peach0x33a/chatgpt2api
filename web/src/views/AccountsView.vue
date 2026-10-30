@@ -116,6 +116,11 @@ function statusTone(status: string) {
     }
 }
 
+/** 凭据来源：codex / web。与套餐拼成 "codex:free" 这类标签显示。 */
+function sourceLabel(source?: string | null) {
+    return (source || "web").trim().toLowerCase();
+}
+
 async function doRefresh() {
     const targets = [...selected.value];
     if (targets.length === 0) {
@@ -348,8 +353,10 @@ async function doDelete() {
                                 </p>
                             </td>
                             <td class="py-2.5 pr-3">
-                                <AppBadge :tone="item.source_type === 'codex' ? 'accent' : 'neutral'">
-                                    {{ item.type }}
+                                <AppBadge
+                                    :tone="item.source_type === 'codex' ? 'accent' : 'neutral'"
+                                >
+                                    {{ sourceLabel(item.source_type) }}:{{ item.type }}
                                 </AppBadge>
                             </td>
                             <td class="py-2.5 pr-3">
