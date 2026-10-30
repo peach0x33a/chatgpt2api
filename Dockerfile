@@ -9,10 +9,8 @@ WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
 RUN npm install
 
-COPY VERSION /app/VERSION
-COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
-RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
+RUN npm run build
 
 
 FROM --platform=$TARGETPLATFORM python:3.13-slim AS app
@@ -49,7 +47,7 @@ COPY api ./api
 COPY services ./services
 COPY utils ./utils
 COPY scripts ./scripts
-COPY --from=web-build /app/web/out ./web_dist
+COPY --from=web-build /app/web/dist ./web_dist
 
 EXPOSE 80
 

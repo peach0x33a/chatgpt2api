@@ -1,0 +1,125 @@
+/* 设计令牌
+ *
+ * 视觉语言取自 quiet-ink 设计规范（素墨 / Quiet Ink）：
+ * 中性优先、边框优先、彩色克制。
+ * 这里只做一件事：把它的 token 映射成 CSS 变量，
+ * 组件一律消费变量，不写死色值。
+ *
+ * 刻意保留的取舍：
+ * - 颜色是中性骨架，彩色各有职责，绝不当大面积背景。
+ * - 正文与标题用霞鹜文楷（人文感），元数据用 Fira Code（系统感）。
+ *   这条分界比任何装饰都更能定义这套语言。
+ * - 边框优先于阴影；阴影只用于真正的层叠。
+ */
+
+/* ── Fira Code 自托管（拉丁子集，体积可控） ── */
+@font-face {
+    font-family: "Fira Code";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/fonts/fira-code-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Fira Code";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("/fonts/fira-code-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Fira Code";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("/fonts/fira-code-latin-700-normal.woff2") format("woff2");
+}
+
+/* 霞鹜文楷屏幕阅读版：中文子集体积巨大，走 CDN + 本地回退。 */
+@import url("https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/style.css");
+
+:root {
+    /* ── 色彩（亮色：纸与墨） ── */
+    --color-ink: #2c2c2c;
+    --color-ink-hover: rgba(44, 44, 44, 0.9);
+    --color-muted: #71717a;
+    --color-paper: #f7f7f8;
+    --color-surface: #ffffff;
+    --color-border: #e4e4e7;
+    --color-overlay: rgba(247, 247, 248, 0.8);
+
+    /* indigo 只承担「交互」这一件事 */
+    --color-accent: #6366f1;
+    --color-accent-bar: #818cf8;
+    --color-accent-text: #4338ca;
+    --color-accent-wash: #eef2ff;
+
+    /* 琥珀=精选，橙=警告，红=错误（全站仅两处） */
+    --color-featured: #92400e;
+    --color-featured-wash: #fffbeb;
+    --color-warning: #ea580c;
+    --color-warning-bar: #fb923c;
+    --color-warning-text: #9a3412;
+    --color-warning-wash: #fff7ed;
+    --color-error: #ef4444;
+
+    /* 语义别名：组件优先用这些，便于暗色统一改写 */
+    --bg: var(--color-paper);
+    --surface: var(--color-surface);
+    --text: var(--color-ink);
+    --text-muted: var(--color-muted);
+    --border: var(--color-border);
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+    --motion-micro: 150ms;
+    --motion-grid: 220ms;
+    --motion-hover: 300ms;
+    --easing: cubic-bezier(0.4, 0, 0.2, 1);
+
+    --font-prose: "LXGW WenKai Screen", "LXGW WenKai", ui-serif, Georgia, serif;
+    --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    color-scheme: light;
+}
+
+/* 暗色：同一套层级，换一张深色纸。只改语义别名。 */
+html.dark {
+    --bg: #121214;
+    --surface: #18181b;
+    --text: #e4e4e7;
+    --text-muted: #a1a1aa;
+    --border: #27272a;
+
+    /* 遮罩要跟着换深色，否则暗色下顶栏仍是一块亮纸。 */
+    --color-overlay: rgba(18, 18, 20, 0.8);
+
+    --color-accent: #818cf8;
+    --color-accent-bar: #818cf8;
+    --color-accent-text: #818cf8;
+    --color-accent-wash: rgba(49, 46, 129, 0.1);
+
+    --color-featured: #fde68a;
+    --color-featured-wash: rgba(69, 26, 3, 0.3);
+    --color-warning: #fb923c;
+    --color-warning-bar: #fb923c;
+    --color-warning-text: #fed7aa;
+    --color-warning-wash: rgba(124, 45, 18, 0.2);
+
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6);
+    --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+
+    color-scheme: dark;
+}

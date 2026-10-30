@@ -54,7 +54,9 @@ def create_app() -> FastAPI:
         asset = resolve_web_asset(full_path)
         if asset is not None:
             return FileResponse(asset)
-        if full_path.strip("/").startswith("_next/"):
+        clean_path = full_path.strip("/")
+        # 静态资源缺失时返回 404，避免回退到 index.html 导致浏览器拿到错误的 MIME。
+        if clean_path.startswith("_next/") or "." in clean_path.rsplit("/", 1)[-1]:
             raise HTTPException(status_code=404, detail="Not Found")
         fallback = resolve_web_asset("")
         if fallback is None:
