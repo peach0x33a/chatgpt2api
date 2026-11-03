@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { Trash2 } from "lucide-vue-next";
 
 import AppBadge from "@/components/ui/AppBadge.vue";
-import AppButton from "@/components/ui/AppButton.vue";
 import AppDialog from "@/components/ui/AppDialog.vue";
+import { assetUrl } from "@/lib/request";
 import {
     deleteSystemLogs,
     fetchSystemLogs,
@@ -12,6 +11,24 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { formatTime } from "@/lib/utils";
+
+/*
+ * 调用日志面板。
+ *
+ * 与图片面板同处一页（见 RecordsView），因此这里不再自带标题与页容器，
+ * 只保留自己的工具条与列表，切换视图时标题与选项卡不跳动。
+ */
+
+const props = defineProps<{
+    /** 从图片详情跳过来时要直接展开的那条日志。 */
+    focusLog?: SystemLog | null;
+    /** 同一条日志被再次跳转时序号会变，用来重新触发展开。 */
+    focusSeq?: number;
+    /** 当前视图是否可见；切走时收起弹窗，避免它浮在另一个视图上。 */
+    active?: boolean;
+}>();
+
+const emit = defineEmits<{ "open-image": [string] }>();
 
 const toast = useToast();
 
@@ -53,6 +70,25 @@ const allSelected = computed(
 
 onMounted(load);
 watch(type, load);
+watch(
+    () => props.focusSeq,
+    () => {
+        if (props.focusLog) {
+            detail.value = props.focusLog;
+        }
+    },
+    { immediate: true },
+);
+
+// 切到图片视图时收起详情：弹窗被传送到 body，隐藏父级收不住它。
+watch(
+    () => props.active,
+    (value) => {
+        if (value === false) {
+            detail.value = null;
+        }
+    },
+);
 
 async function load() {
     loading.value = true;
@@ -140,19 +176,27 @@ const detailJson = computed(() => {
     }
     return JSON.stringify(detail.value.detail ?? {}, null, 2);
 });
+
+/** 详情里的产物：生图调用会留下 urls，直接缩略展示，点开即跳图片视图。 */
+const detailUrls = computed(() => {
+    const value = detail.value?.detail?.urls;
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.filter((url): url is string => typeof url === "string" && url.length > 0);
+});
+
+const detailError = computed(() => {
+    const value = detail.value?.detail?.error;
+    return typeof value === "string" ? value : "";
+});
 </script>
 
 <template>
     <div class="space-y-6">
-        <div class="flex flex-wrap items-baseline justify-between gap-4 border-b border-border pb-4">
-            <h1 class="text-2xl font-bold text-ink" style="font-family: var(--font-prose)">
-                日志
-            </h1>
-        </div>
-
         <!--
             一行骨架：左侧读数，右侧筛选与操作。
-            与号池、图片页保持同一节奏。
+            与号池、图片面板保持同一节奏。
         -->
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-dashed border-border pb-3">
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -235,7 +279,7 @@ const detailJson = computed(() => {
             <p class="text-sm text-muted">没有日志</p>
         </div>
         <div v-else class="overflow-x-auto">
-            <table class="w-full text-sm">
+            <table class="w-full min-w-[44rem] text-sm">
                 <thead>
                     <tr class="border-b border-border text-left">
                         <th class="w-8 py-2">
@@ -338,6 +382,44 @@ const detailJson = computed(() => {
                     <div>
                         <p class="meta-xs">操作者</p>
                         <p class="mt-0.5 text-sm text-ink">{{ detailValue(detail, "key_name") }}</p>
+                    </div>
+                </div>
+
+                <div v-if="detailValue(detail, 'request_text') !== '-'" class="border-t border-border pt-3">
+                    <p class="meta-xs mb-1.5">请求内容</p>
+                    <p class="max-h-40 overflow-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
+                        {{ detailValue(detail, "request_text") }}
+                    </p>
+                </div>
+
+                <div v-if="detailError" class="border-t border-border pt-3">
+                    <p class="meta-xs mb-1.5">错误</p>
+                    <p
+                        class="whitespace-pre-wrap break-words text-xs leading-relaxed"
+                        :style="{ color: 'var(--color-error)' }"
+                    >
+                        {{ detailError }}
+                    </p>
+                </div>
+
+                <!-- 产物：点开直接跳到图片视图里对应的那张 -->
+                <div v-if="detailUrls.length > 0" class="border-t border-border pt-3">
+                    <p class="meta-xs mb-2">产物</p>
+                    <div class="flex flex-wrap gap-2">
+                        <button
+                            v-for="url in detailUrls"
+                            :key="url"
+                            class="group relative size-20 overflow-hidden rounded-sm border border-border bg-bg transition-colors duration-150 hover:border-ink"
+                            :title="'在图片中查看'"
+                            @click="emit('open-image', url)"
+                        >
+                            <img
+                                :src="assetUrl(url)"
+                                alt=""
+                                class="size-full object-cover transition-opacity duration-150 group-hover:opacity-80"
+                                loading="lazy"
+                            />
+                        </button>
                     </div>
                 </div>
 

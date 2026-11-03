@@ -131,6 +131,9 @@ function onKeydown(event: KeyboardEvent) {
             return;
     }
     event.preventDefault();
+    // 捕获阶段拦下：灯箱常叠在弹窗之上，Esc 只该关最上层，
+    // 否则底下的详情弹窗会一起消失。
+    event.stopPropagation();
 }
 
 /* ── 滚轮缩放 ── */
@@ -201,16 +204,17 @@ function onTouchEnd() {
 /* 打开时挂键盘监听，关闭时移除。 */
 watch(open, (value) => {
     if (value) {
-        window.addEventListener("keydown", onKeydown);
+        // 捕获阶段：灯箱可能叠在弹窗之上，需要先于弹窗拿到 Esc。
+        window.addEventListener("keydown", onKeydown, true);
         document.body.style.overflow = "hidden";
     } else {
-        window.removeEventListener("keydown", onKeydown);
+        window.removeEventListener("keydown", onKeydown, true);
         document.body.style.overflow = "";
     }
 });
 
 onBeforeUnmount(() => {
-    window.removeEventListener("keydown", onKeydown);
+    window.removeEventListener("keydown", onKeydown, true);
     document.body.style.overflow = "";
 });
 </script>

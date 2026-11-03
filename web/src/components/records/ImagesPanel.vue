@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { Check, Download, Tag, Trash2, X } from "lucide-vue-next";
+import { computed, onMounted, ref, watch } from "vue";
+import { Check, Download, Info, Tag, Trash2, X } from "lucide-vue-next";
 
 import AppBadge from "@/components/ui/AppBadge.vue";
 import AppButton from "@/components/ui/AppButton.vue";
+import AppDialog from "@/components/ui/AppDialog.vue";
 import LazyImage from "@/components/ui/LazyImage.vue";
 import ImageLightbox, { type LightboxItem } from "@/components/ImageLightbox.vue";
-import AppDialog from "@/components/ui/AppDialog.vue";
 import {
     compressAllImages,
     deleteImageTag,
@@ -17,18 +17,41 @@ import {
     fetchImageStorage,
     fetchImageTags,
     fetchManagedImages,
+    fetchSystemLogs,
     setImageTags,
     type ImageStorageStats,
     type ManagedImage,
+    type SystemLog,
 } from "@/lib/api";
 import { assetUrl } from "@/lib/request";
 import { useToast } from "@/lib/toast";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatTime, imageRelFromUrl } from "@/lib/utils";
+
+/*
+ * 图片面板。
+ *
+ * 与调用日志同处一页：图片不再是孤立的文件，而是能回到产生它的那次请求。
+ * 图库本身只存文件，请求信息来自日志里的 urls 字段，两边按相对路径对齐。
+ */
+
+const props = defineProps<{
+    /** 从日志详情跳过来时要直接展开的那张图。 */
+    focusImageRel?: string | null;
+    /** 当前视图是否可见；切走时收起弹窗，避免它浮在另一个视图上。 */
+    active?: boolean;
+}>();
+
+const emit = defineEmits<{
+    "open-log": [SystemLog];
+    "focus-consumed": [];
+}>();
 
 const toast = useToast();
 
 const items = ref<ManagedImage[]>([]);
 const loading = ref(false);
+/** 至少成功加载过一次，用来判断「跳转目标还没出现」还是「确实不存在」。 */
+const loadedOnce = ref(false);
 /** 加载失败原因：与「没有图片」区分开。 */
 const loadError = ref("");
 const startDate = ref("");
@@ -49,8 +72,12 @@ const storageBusy = ref(false);
 const targetFreeMb = ref(500);
 const storageOpen = ref(false);
 
-/* 预览 */
+/* 预览与详情 */
 const previewIndex = ref<number | null>(null);
+const detail = ref<ManagedImage | null>(null);
+
+/* 请求记录：只取调用日志，建立「图片 → 请求」索引 */
+const callLogs = ref<SystemLog[]>([]);
 
 const filtered = computed(() => {
     if (activeTags.value.size === 0) {
@@ -66,9 +93,72 @@ const hasMore = computed(() => paged.value.length < filtered.value.length);
 
 const totalSize = computed(() => filtered.value.reduce((sum, item) => sum + (item.size || 0), 0));
 
-onMounted(async () => {
-    await Promise.all([load(), loadTags(), loadStorage()]);
+const logByRel = computed(() => {
+    const map = new Map<string, SystemLog>();
+    for (const log of callLogs.value) {
+        const urls = log.detail?.urls;
+        if (!Array.isArray(urls)) {
+            continue;
+        }
+        for (const url of urls) {
+            if (typeof url !== "string") {
+                continue;
+            }
+            const rel = imageRelFromUrl(url);
+            // 同一张图只认最早的一条（列表按时间倒序，先到先得即最新一次）。
+            if (rel && !map.has(rel)) {
+                map.set(rel, log);
+            }
+        }
+    }
+    return map;
 });
+
+const detailLog = computed(() => (detail.value ? logByRel.value.get(detail.value.rel) ?? null : null));
+
+const detailJson = computed(() => {
+    if (!detailLog.value) {
+        return "";
+    }
+    return JSON.stringify(detailLog.value.detail ?? {}, null, 2);
+});
+
+onMounted(async () => {
+    await Promise.all([load(), loadTags(), loadStorage(), loadLogs()]);
+});
+
+// 切到日志视图时收起详情：弹窗被传送到 body，隐藏父级收不住它。
+watch(
+    () => props.active,
+    (value) => {
+        if (value === false) {
+            detail.value = null;
+        }
+    },
+);
+
+watch(
+    () => [props.focusImageRel, items.value] as const,
+    () => {
+        const rel = props.focusImageRel;
+        if (!rel) {
+            return;
+        }
+        const target = items.value.find((item) => item.rel === rel);
+        if (!target) {
+            // 列表已经加载完还是没有这张图：说明它已被删除或不在当前范围，
+            // 交回意图，避免下次刷新列表时又弹一次空详情。
+            if (loadedOnce.value) {
+                toast.info("没有找到对应的图片，可能已被清理");
+                emit("focus-consumed");
+            }
+            return;
+        }
+        detail.value = target;
+        emit("focus-consumed");
+    },
+    { immediate: true },
+);
 
 async function load() {
     loading.value = true;
@@ -79,6 +169,7 @@ async function load() {
             end_date: endDate.value,
         });
         items.value = data.items;
+        loadedOnce.value = true;
         page.value = 1;
         // 清掉已不存在的选中项。
         const existing = new Set(data.items.map((item) => item.rel));
@@ -89,6 +180,16 @@ async function load() {
         loadError.value = error instanceof Error ? error.message : "加载图片失败";
     } finally {
         loading.value = false;
+    }
+}
+
+/** 请求记录只用来补充信息，失败时静默降级为「没有对应记录」。 */
+async function loadLogs() {
+    try {
+        const data = await fetchSystemLogs({ type: "call" });
+        callLogs.value = data.items;
+    } catch {
+        callLogs.value = [];
     }
 }
 
@@ -279,33 +380,62 @@ const lightboxItems = computed<LightboxItem[]>(() =>
     })),
 );
 
+/** 打开灯箱；目标在图库更靠后的位置时先展开到那一页，否则翻不过去。 */
 function openPreview(item: ManagedImage) {
-    const index = paged.value.findIndex((entry) => entry.rel === item.rel);
-    if (index >= 0) {
-        previewIndex.value = index;
+    const index = filtered.value.findIndex((entry) => entry.rel === item.rel);
+    if (index < 0) {
+        return;
     }
+    if (index >= paged.value.length) {
+        page.value = Math.ceil((index + 1) / PAGE_SIZE);
+    }
+    previewIndex.value = index;
+}
+
+function openDetail(item: ManagedImage) {
+    detail.value = item;
+}
+
+function openDetailLog() {
+    const log = detailLog.value;
+    if (!log) {
+        return;
+    }
+    detail.value = null;
+    emit("open-log", log);
+}
+
+/** 请求信息里的常用字段，避免模板里重复取值。 */
+function logValue(key: string): string {
+    const value = detailLog.value?.detail?.[key];
+    if (typeof value === "string" || typeof value === "number") {
+        return String(value);
+    }
+    return "-";
+}
+
+function logDuration(): string {
+    const value = detailLog.value?.detail?.duration_ms;
+    return typeof value === "number" ? `${(value / 1000).toFixed(2)}s` : "-";
+}
+
+function logStatus(): { label: string; tone: "success" | "danger" | "neutral" } {
+    const status = detailLog.value?.detail?.status;
+    if (status === "success") {
+        return { label: "成功", tone: "success" };
+    }
+    if (status === "failed") {
+        return { label: "失败", tone: "danger" };
+    }
+    return { label: "-", tone: "neutral" };
 }
 </script>
 
 <template>
     <div class="space-y-6">
-        <div class="flex flex-wrap items-baseline justify-between gap-4 border-b border-border pb-4">
-            <div>
-                <h1 class="text-2xl font-bold text-ink" style="font-family: var(--font-prose)">
-                    图片
-                </h1>
-            </div>
-            <div v-if="selectedPaths.size > 0" class="flex items-center gap-3">
-                <span class="meta-xs">已选 {{ selectedPaths.size }}</span>
-                <button class="bracket-button" @click="downloadSelected">[下载]</button>
-                <button class="bracket-button" @click="removeSelected">[删除]</button>
-                <button class="bracket-button" @click="selectedPaths = new Set()">[取消选择]</button>
-            </div>
-        </div>
-
         <!--
-            一行骨架：左侧读数，右侧操作。与号池页共用同一节奏，
-            切换页面时控件位置不跳动。
+            一行骨架：左侧读数，右侧操作。与号池、日志面板共用同一节奏，
+            切换视图时控件位置不跳动。
         -->
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-dashed border-border pb-3">
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -342,6 +472,14 @@ function openPreview(item: ManagedImage) {
             </div>
 
             <div class="ml-auto flex flex-wrap items-center gap-2">
+                <template v-if="selectedPaths.size > 0">
+                    <span class="meta-xs">已选 {{ selectedPaths.size }}</span>
+                    <button class="bracket-button" @click="downloadSelected">[下载]</button>
+                    <button class="bracket-button" @click="removeSelected">[删除]</button>
+                    <button class="bracket-button" @click="selectedPaths = new Set()">[取消选择]</button>
+                    <div class="h-5 w-px bg-border" />
+                </template>
+
                 <input
                     v-model="startDate"
                     type="date"
@@ -401,54 +539,78 @@ function openPreview(item: ManagedImage) {
                     selectedPaths.has(item.rel) ? 'border-ink' : 'border-border',
                 ]"
             >
-                <div class="aspect-square w-full cursor-zoom-in">
-                    <LazyImage
-                        :src="assetUrl(item.thumbnail_url || item.url)"
-                        :alt="item.name"
-                        img-class="object-cover"
-                        @click="openPreview(item)"
-                    />
-                </div>
+                <!--
+                    缩略图与浮层单独包一层：操作条必须贴在图片底边，
+                    落在卡片底边会盖住下方的日期和大小。
+                -->
+                <div class="relative aspect-square w-full">
+                    <div class="size-full cursor-zoom-in">
+                        <LazyImage
+                            :src="assetUrl(item.thumbnail_url || item.url)"
+                            :alt="item.name"
+                            img-class="object-cover"
+                            @click="openPreview(item)"
+                        />
+                    </div>
 
-                <!-- 选中标记 -->
-                <button
-                    class="absolute left-2 top-2 flex size-5 items-center justify-center rounded-sm border transition-colors duration-150"
-                    :class="
-                        selectedPaths.has(item.rel)
-                            ? 'border-ink bg-ink text-bg'
-                            : 'border-border bg-surface/90 text-transparent hover:text-muted'
-                    "
-                    :aria-label="selectedPaths.has(item.rel) ? '取消选中' : '选中'"
-                    @click.stop="toggleSelect(item.rel)"
-                >
-                    <Check class="size-3" />
-                </button>
+                    <!-- 选中标记 -->
+                    <button
+                        class="absolute left-2 top-2 flex size-5 items-center justify-center rounded-sm border transition-colors duration-150"
+                        :class="
+                            selectedPaths.has(item.rel)
+                                ? 'border-ink bg-ink text-bg'
+                                : 'border-border bg-surface/90 text-transparent hover:text-muted'
+                        "
+                        :aria-label="selectedPaths.has(item.rel) ? '取消选中' : '选中'"
+                        @click.stop="toggleSelect(item.rel)"
+                    >
+                        <Check class="size-3" />
+                    </button>
 
-                <!-- 悬停操作 -->
-                <div
-                    class="absolute inset-x-0 bottom-0 flex items-center justify-end gap-1 bg-gradient-to-t from-ink/70 to-transparent p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                >
+                    <!-- 详情入口常驻：触摸设备没有悬停，也能进到请求信息 -->
                     <button
-                        class="rounded-sm bg-surface p-1.5 text-ink"
-                        aria-label="编辑标签"
-                        @click.stop="tagTarget = item; tagInput = (item.tags || []).join(', ')"
+                        class="absolute right-2 top-2 flex size-5 items-center justify-center rounded-sm border bg-surface/90 transition-colors duration-150 hover:border-ink hover:text-ink"
+                        :class="logByRel.has(item.rel) ? 'border-border text-muted' : 'border-transparent text-muted/70'"
+                        :aria-label="logByRel.has(item.rel) ? '查看请求详情' : '查看图片详情'"
+                        :title="logByRel.has(item.rel) ? '查看请求详情' : '查看图片详情'"
+                        @click.stop="openDetail(item)"
                     >
-                        <Tag class="size-3" />
+                        <Info class="size-3" />
                     </button>
-                    <button
-                        class="rounded-sm bg-surface p-1.5 text-ink"
-                        aria-label="下载"
-                        @click.stop="downloadSingleImage(item.rel)"
+
+                    <!--
+                        操作条：一块自带边框的小面板，不用渐变遮罩 ——
+                        暗色下 ink 是浅色，渐变会糊成一条灰带。
+                        桌面悬停出现，触摸设备常显。
+                    -->
+                    <div
+                        class="absolute bottom-2 right-2 flex items-center gap-1 rounded-sm border border-border bg-surface/95 p-1 shadow-[var(--shadow-lg)] opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 touch-visible"
                     >
-                        <Download class="size-3" />
-                    </button>
-                    <button
-                        class="rounded-sm bg-surface p-1.5 text-ink"
-                        aria-label="删除"
-                        @click.stop="removeOne(item)"
-                    >
-                        <Trash2 class="size-3" />
-                    </button>
+                        <button
+                            class="rounded-sm p-1.5 text-muted transition-colors duration-150 hover:bg-border/40 hover:text-ink"
+                            aria-label="编辑标签"
+                            title="编辑标签"
+                            @click.stop="tagTarget = item; tagInput = (item.tags || []).join(', ')"
+                        >
+                            <Tag class="size-3" />
+                        </button>
+                        <button
+                            class="rounded-sm p-1.5 text-muted transition-colors duration-150 hover:bg-border/40 hover:text-ink"
+                            aria-label="下载"
+                            title="下载"
+                            @click.stop="downloadSingleImage(item.rel)"
+                        >
+                            <Download class="size-3" />
+                        </button>
+                        <button
+                            class="rounded-sm p-1.5 text-muted transition-colors duration-150 hover:bg-border/40 hover:text-ink"
+                            aria-label="删除"
+                            title="删除"
+                            @click.stop="removeOne(item)"
+                        >
+                            <Trash2 class="size-3" />
+                        </button>
+                    </div>
                 </div>
 
                 <!-- 元数据 -->
@@ -471,6 +633,129 @@ function openPreview(item: ManagedImage) {
                 加载更多（{{ filtered.length - paged.length }}）
             </AppButton>
         </div>
+
+        <!--
+            图片详情：先看文件本身，再顺着日志把那次请求还原出来。
+            没有记录的旧图不编造信息，只说明「找不到」。
+        -->
+        <AppDialog
+            :open="detail !== null"
+            title="图片详情"
+            :description="detail ? `${detail.date} · ${formatBytes(detail.size)}` : ''"
+            size="lg"
+            @update:open="detail = null"
+        >
+            <div v-if="detail" class="space-y-5">
+                <div class="flex flex-col gap-4 sm:flex-row">
+                    <button
+                        class="group relative w-full shrink-0 overflow-hidden rounded-sm border border-border bg-bg sm:w-52"
+                        title="看大图"
+                        @click="openPreview(detail)"
+                    >
+                        <span class="block aspect-square w-full">
+                            <LazyImage
+                                :src="assetUrl(detail.thumbnail_url || detail.url)"
+                                :alt="detail.name"
+                                img-class="object-cover transition-opacity duration-150 group-hover:opacity-85"
+                            />
+                        </span>
+                        <span class="absolute bottom-2 right-2 rounded-sm bg-surface/90 px-1.5 py-0.5 font-mono text-[10px] text-ink">
+                            看大图
+                        </span>
+                    </button>
+
+                    <div class="grid flex-1 grid-cols-2 gap-3">
+                        <div class="col-span-2">
+                            <p class="meta-xs">文件</p>
+                            <p class="mt-0.5 truncate font-mono text-xs text-ink" :title="detail.name">
+                                {{ detail.name }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="meta-xs">尺寸</p>
+                            <p class="mt-0.5 font-mono text-xs text-ink">
+                                {{ detail.width && detail.height ? `${detail.width} × ${detail.height}` : "-" }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="meta-xs">日期</p>
+                            <p class="mt-0.5 font-mono text-xs text-ink">{{ detail.date }}</p>
+                        </div>
+                        <div v-if="detail.tags?.length" class="col-span-2">
+                            <p class="meta-xs">标签</p>
+                            <div class="mt-1 flex flex-wrap gap-1">
+                                <AppBadge v-for="tag in detail.tags" :key="tag" tone="accent">
+                                    {{ tag }}
+                                </AppBadge>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t border-border pt-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <p class="meta-xs">请求记录</p>
+                        <button v-if="detailLog" class="bracket-button" @click="openDetailLog">[查看日志]</button>
+                    </div>
+
+                    <template v-if="detailLog">
+                        <p class="mt-2 text-sm text-ink">{{ detailLog.summary || "调用记录" }}</p>
+                        <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            <div>
+                                <p class="meta-xs">状态</p>
+                                <p class="mt-0.5">
+                                    <AppBadge :tone="logStatus().tone">{{ logStatus().label }}</AppBadge>
+                                </p>
+                            </div>
+                            <div>
+                                <p class="meta-xs">模型</p>
+                                <p class="mt-0.5 font-mono text-xs text-ink">{{ logValue("model") }}</p>
+                            </div>
+                            <div>
+                                <p class="meta-xs">耗时</p>
+                                <p class="mt-0.5 font-mono text-xs text-ink">{{ logDuration() }}</p>
+                            </div>
+                            <div>
+                                <p class="meta-xs">接口</p>
+                                <p class="mt-0.5 font-mono text-xs text-ink">{{ logValue("endpoint") }}</p>
+                            </div>
+                            <div>
+                                <p class="meta-xs">账号</p>
+                                <p class="mt-0.5 truncate text-sm text-ink">{{ logValue("account_email") }}</p>
+                            </div>
+                            <div>
+                                <p class="meta-xs">操作者</p>
+                                <p class="mt-0.5 text-sm text-ink">{{ logValue("key_name") }}</p>
+                            </div>
+                        </div>
+
+                        <div v-if="logValue('request_text') !== '-'" class="mt-3">
+                            <p class="meta-xs mb-1.5">提示词</p>
+                            <p class="max-h-40 overflow-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
+                                {{ logValue("request_text") }}
+                            </p>
+                        </div>
+
+                        <p class="meta-xs mt-3">请求时间 {{ formatTime(detailLog.time) }}</p>
+                    </template>
+                    <p v-else class="mt-2 text-xs leading-relaxed text-muted">
+                        没有找到这张图对应的调用记录（可能已超出日志保留范围，或图片是手动放入的）。
+                    </p>
+                </div>
+
+                <div v-if="detailJson !== '{}'" class="border-t border-border pt-4">
+                    <p class="meta-xs mb-2">原始数据</p>
+                    <pre
+                        class="max-h-56 overflow-auto rounded-sm border border-border bg-bg p-3 font-mono text-[11px] leading-relaxed text-muted"
+                    >{{ detailJson }}</pre>
+                </div>
+
+                <div class="flex justify-end gap-3 border-t border-border pt-3">
+                    <button class="bracket-button" @click="detail = null">[关闭]</button>
+                    <AppButton variant="secondary" size="sm" @click="openPreview(detail)">看大图</AppButton>
+                </div>
+            </div>
+        </AppDialog>
 
         <!-- 存储维护：低频操作集中在弹窗内，避免误触 -->
         <AppDialog
@@ -571,3 +856,15 @@ function openPreview(item: ManagedImage) {
         <ImageLightbox v-model:index="previewIndex" :items="lightboxItems" />
     </div>
 </template>
+
+<style scoped>
+/*
+ * 触摸设备没有悬停，操作按钮必须常显，否则用户永远够不到标签、下载与删除。
+ * 用 hover:none 而不是按屏宽判断：带触摸屏的笔记本也能正确取舍。
+ */
+@media (hover: none) {
+    .touch-visible {
+        opacity: 1;
+    }
+}
+</style>

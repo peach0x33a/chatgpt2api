@@ -17,8 +17,7 @@ const mobileOpen = ref(false);
 const adminNav = [
     { to: "/image", label: "生图" },
     { to: "/accounts", label: "号池" },
-    { to: "/image-manager", label: "图片" },
-    { to: "/logs", label: "日志" },
+    { to: "/logs", label: "记录" },
     { to: "/settings", label: "设置" },
 ];
 

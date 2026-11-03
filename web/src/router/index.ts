@@ -29,15 +29,14 @@ const router = createRouter({
         },
         {
             path: "/image-manager",
-            name: "image-manager",
-            component: () => import("@/views/ImageManagerView.vue"),
-            meta: { title: "图片管理", adminOnly: true },
+            // 图片管理已并入记录页，旧地址仍然可用。
+            redirect: { name: "records", query: { view: "images" } },
         },
         {
             path: "/logs",
-            name: "logs",
-            component: () => import("@/views/LogsView.vue"),
-            meta: { title: "日志管理", adminOnly: true },
+            name: "records",
+            component: () => import("@/views/RecordsView.vue"),
+            meta: { title: "日志与图片", adminOnly: true },
         },
         {
             path: "/settings",

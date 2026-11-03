@@ -68,6 +68,27 @@ export function createId(prefix = ""): string {
     return prefix ? `${prefix}${random}` : random;
 }
 
+/**
+ * 从日志里的图片地址取出图库相对路径。
+ *
+ * 日志记录的是完整 URL（可能还带查询串），而图库用的是 `2026/10/26/xx.png`
+ * 这样的相对路径。两边只靠这一段对齐，合并视图时用它把图片和请求连起来。
+ */
+export function imageRelFromUrl(url: string): string {
+    const clean = String(url || "").split("?")[0].split("#")[0];
+    const marker = "/images/";
+    const index = clean.indexOf(marker);
+    const raw = index >= 0 ? clean.slice(index + marker.length) : "";
+    if (!raw) {
+        return "";
+    }
+    try {
+        return decodeURIComponent(raw);
+    } catch {
+        return raw;
+    }
+}
+
 /** 延时函数，供轮询使用。 */
 export function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));

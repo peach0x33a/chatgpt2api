@@ -70,6 +70,9 @@ function onKeydown(event: KeyboardEvent) {
     }
     switch (event.key) {
         case "Escape":
+            // 先收起面板，别让 Esc 继续冒泡去关掉外层弹窗（例如编辑账号）。
+            event.preventDefault();
+            event.stopPropagation();
             open.value = false;
             break;
         case "ArrowDown":
@@ -114,10 +117,22 @@ function positionPanel() {
         left: `${rect.left}px`,
         width: `${Math.max(rect.width, 112)}px`,
         zIndex: "80",
+        // 面板被传送到 body 上。模态弹窗（reka-ui Dialog）会给 body 加
+        // pointer-events: none，面板作为 body 的子节点会一起变成「点不到」。
+        // 这里显式放行，只让这一块可交互。
+        pointerEvents: "auto",
         ...(openUpward
             ? { bottom: `${window.innerHeight - rect.top + 4}px` }
             : { top: `${rect.bottom + 4}px` }),
     };
+}
+
+/**
+ * 面板在弹窗里打开时，点击/聚焦都发生在弹窗的 DismissableLayer 之外。
+ * 拦住 pointerdown 的冒泡，弹窗就不会把「选一项」误判成「点外面」而关掉。
+ */
+function onPanelPointerDown(event: PointerEvent) {
+    event.stopPropagation();
 }
 
 watch(open, async (value) => {
@@ -188,6 +203,8 @@ onBeforeUnmount(() => {
                 role="listbox"
                 class="max-h-60 overflow-y-auto rounded-sm border border-border bg-surface py-1 shadow-[var(--shadow-lg)]"
                 :style="panelStyle"
+                @pointerdown="onPanelPointerDown"
+                @keydown="onKeydown"
             >
                 <button
                     v-for="(option, index) in options"
