@@ -336,6 +336,99 @@ class OpenAIBackendAPI:
         })
         return default_account
 
+    def get_account_settings(self) -> Dict[str, Any]:
+        """读取账号个人设置（含记忆开关 m3m）。"""
+        path = "/backend-api/settings/user"
+        response = self.session.get(
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            self._raise_on_error(response, path)
+        payload = response.json()
+        settings = payload.get("settings")
+        return settings if isinstance(settings, dict) else {}
+
+    def set_account_feature(self, feature: str, value: bool) -> Dict[str, Any]:
+        """切换账号上的单个 feature 开关。
+
+        参数全部走 query string，请求体必须为空；value 只接受小写 true/false。
+        记忆开关的内部代号是 m3m（关闭时 memory_max_tokens 会降到 2000，
+        同时联动 moonshine / sunshine 两个 flag）。
+        """
+        path = (
+            "/backend-api/settings/account_user_setting"
+            f"?feature={feature}&value={'true' if value else 'false'}"
+        )
+        response = self.session.patch(
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            self._raise_on_error(response, path)
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def get_memories(self) -> Dict[str, Any]:
+        """读取账号的记忆条目。
+
+        ChatGPT 的个人记忆存在 /backend-api/memories；自定义指令（about you /
+        about model）存在 /backend-api/user_system_messages。两者都会作为
+        账户级上下文注入对话，所以一并取回供后台查看。
+        """
+        path = "/backend-api/memories?tz_offset_min=-480"
+        response = self.session.get(
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            self._raise_on_error(response, path)
+        payload = response.json()
+        items = []
+        for entry in payload.get("memories") or []:
+            if not isinstance(entry, dict):
+                continue
+            items.append({
+                "id": str(entry.get("id") or ""),
+                "content": str(entry.get("content") or ""),
+                "created_at": entry.get("created_at"),
+                "updated_at": entry.get("updated_at"),
+            })
+        return {
+            "memories": items,
+            "memory_num_tokens": payload.get("memory_num_tokens"),
+            "memory_max_tokens": payload.get("memory_max_tokens"),
+        }
+
+    def get_user_system_messages(self) -> Dict[str, Any]:
+        """读取自定义指令与人格设置。"""
+        path = "/backend-api/user_system_messages"
+        response = self.session.get(
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            self._raise_on_error(response, path)
+        payload = response.json()
+        fields = (
+            "about_user_message",
+            "about_model_message",
+            "name_user_message",
+            "role_user_message",
+            "traits_model_message",
+            "other_user_message",
+            "personality_type_selection",
+        )
+        result = {key: str(payload.get(key) or "") for key in fields}
+        result["enabled"] = bool(payload.get("enabled"))
+        result["traits_enabled"] = bool(payload.get("traits_enabled"))
+        result["disabled_tools"] = payload.get("disabled_tools") or []
+        return result
+
     def get_user_info(self) -> Dict[str, Any]:
         """获取当前 token 的账号信息。"""
         if not self.access_token:

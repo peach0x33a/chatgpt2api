@@ -130,6 +130,52 @@ export async function updateAccount(
     });
 }
 
+export type AccountMemoryEntry = {
+    id: string;
+    content: string;
+    created_at?: string | number | null;
+    updated_at?: string | number | null;
+};
+
+// AccountMemories 已定义在下方
+export type AccountMemories = {
+    /** 上游记忆开关（内部代号 m3m）当前状态。 */
+    memory_enabled: boolean;
+    memories: {
+        memories: AccountMemoryEntry[];
+        memory_num_tokens?: number | null;
+        memory_max_tokens?: number | null;
+    };
+    instructions: {
+        about_user_message: string;
+        about_model_message: string;
+        name_user_message: string;
+        role_user_message: string;
+        traits_model_message: string;
+        other_user_message: string;
+        personality_type_selection: string;
+        enabled: boolean;
+        traits_enabled: boolean;
+        disabled_tools: string[];
+    };
+};
+
+/** 读取某个账号在上游保存的记忆与自定义指令。 */
+export async function fetchAccountMemories(accessToken: string) {
+    return httpRequest<AccountMemories>("/api/accounts/memories", {
+        method: "POST",
+        body: { access_token: accessToken },
+    });
+}
+
+/** 开/关某个账号的记忆功能。 */
+export async function toggleAccountMemory(accessToken: string, enabled: boolean) {
+    return httpRequest<{ memory_enabled: boolean; result: Record<string, unknown> }>(
+        "/api/accounts/memories/toggle",
+        { method: "POST", body: { access_token: accessToken, enabled } },
+    );
+}
+
 export async function refreshAccounts(accessTokens: string[]) {
     return httpRequest<{ progress_id: string }>("/api/accounts/refresh", {
         method: "POST",

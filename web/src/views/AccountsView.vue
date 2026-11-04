@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Pencil, Trash2 } from "lucide-vue-next";
+import { Brain, Pencil, Trash2 } from "lucide-vue-next";
 
 import AccountEditDialog from "@/components/AccountEditDialog.vue";
+import AccountMemoryDialog from "@/components/AccountMemoryDialog.vue";
 import ImportDialog from "@/components/ImportDialog.vue";
 import AppBadge from "@/components/ui/AppBadge.vue";
 import AppButton from "@/components/ui/AppButton.vue";
@@ -30,6 +31,7 @@ const STATUS_OPTIONS = [
     { value: "禁用", label: "禁用" },
 ];
 
+
 const accounts = ref<Account[]>([]);
 const loading = ref(false);
 /** 加载失败原因。与「空列表」区分开，避免把请求失败显示成没有账号。 */
@@ -40,6 +42,8 @@ const selected = ref<Set<string>>(new Set());
 const importOpen = ref(false);
 /** 正在编辑的账号；null 表示对话框关闭。 */
 const editingAccount = ref<Account | null>(null);
+/** 正在查看记忆的账号；null 表示对话框关闭。 */
+const memoryAccount = ref<Account | null>(null);
 
 const progress = ref<RefreshProgressResponse | null>(null);
 const progressLabel = ref("");
@@ -381,6 +385,14 @@ async function doDelete() {
                                     <span class="meta-xs">{{ formatTime(item.last_used_at) }}</span>
                                     <button
                                         class="opacity-0 transition-opacity duration-150 hover:opacity-100 group-hover/row:opacity-60"
+                                        aria-label="查看记忆"
+                                        title="查看账号记忆与自定义指令"
+                                        @click="memoryAccount = item"
+                                    >
+                                        <Brain class="size-3" />
+                                    </button>
+                                    <button
+                                        class="opacity-0 transition-opacity duration-150 hover:opacity-100 group-hover/row:opacity-60"
                                         aria-label="编辑账号"
                                         @click="editingAccount = item"
                                     >
@@ -399,5 +411,6 @@ async function doDelete() {
             v-model:account="editingAccount"
             @saved="load"
         />
+        <AccountMemoryDialog v-model:account="memoryAccount" />
     </div>
 </template>

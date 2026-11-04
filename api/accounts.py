@@ -71,6 +71,15 @@ class AccountUpdateRequest(BaseModel):
     proxy: str | None = None
 
 
+class AccountMemoryRequest(BaseModel):
+    access_token: str = ""
+
+
+class AccountMemoryToggleRequest(BaseModel):
+    access_token: str = ""
+    enabled: bool
+
+
 class CPAPoolCreateRequest(BaseModel):
     name: str = ""
     base_url: str = ""
@@ -164,6 +173,19 @@ def _account_zip_bytes(items: list[dict[str, str]]) -> bytes:
                 json.dumps(item, ensure_ascii=False, indent=2) + "\n",
             )
     return buf.getvalue()
+
+
+def _account_backend(access_token: str):
+    """按 token 取到账号对应的 backend，沿用账号自己的代理配置。"""
+    from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
+
+    token = str(access_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail={"error": "access_token is required"})
+    account = account_service.get_account(token)
+    if account is None:
+        raise HTTPException(status_code=404, detail={"error": "account not found"})
+    return OpenAIBackendAPI(access_token=str(account.get("access_token") or token)), InvalidAccessTokenError
 
 
 def create_router() -> APIRouter:
@@ -341,6 +363,51 @@ def create_router() -> APIRouter:
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="codex-accounts-{timestamp}.json"'},
         )
+
+    @router.post("/api/accounts/memories")
+    async def get_account_memories(body: AccountMemoryRequest, authorization: str | None = Header(default=None)):
+        """查看该账号在上游保存的记忆与自定义指令。
+
+        这些内容是账户级上下文，会注入到该账号的每一次对话里，包括生图链路，
+        排查「模型为什么这样理解我的提示词」时需要能看到它们。
+        """
+        require_admin(authorization)
+        backend, invalid_error = _account_backend(body.access_token)
+        try:
+            memories = await run_in_threadpool(backend.get_memories)
+            instructions = await run_in_threadpool(backend.get_user_system_messages)
+            settings = await run_in_threadpool(backend.get_account_settings)
+        except invalid_error as exc:
+            raise HTTPException(status_code=401, detail={"error": str(exc)}) from exc
+        except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+            raise HTTPException(status_code=502, detail={"error": str(exc) or "读取账号记忆失败"}) from exc
+        finally:
+            backend.close()
+        return {
+            "memories": memories,
+            "instructions": instructions,
+            "memory_enabled": bool(settings.get("m3m")),
+        }
+
+    @router.post("/api/accounts/memories/toggle")
+    async def toggle_account_memory(body: AccountMemoryToggleRequest, authorization: str | None = Header(default=None)):
+        """开/关该账号的记忆功能。
+
+        上游把记忆开关收在 account_user_setting 里，内部代号 m3m。关闭后
+        memory_max_tokens 会从 5000000 降到 2000，同时联动 moonshine/sunshine。
+        """
+        require_admin(authorization)
+        backend, invalid_error = _account_backend(body.access_token)
+        try:
+            result = await run_in_threadpool(backend.set_account_feature, "m3m", bool(body.enabled))
+            settings = await run_in_threadpool(backend.get_account_settings)
+        except invalid_error as exc:
+            raise HTTPException(status_code=401, detail={"error": str(exc)}) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail={"error": str(exc) or "切换记忆开关失败"}) from exc
+        finally:
+            backend.close()
+        return {"memory_enabled": bool(settings.get("m3m")), "result": result}
 
     @router.post("/api/accounts/update")
     async def update_account(body: AccountUpdateRequest, authorization: str | None = Header(default=None)):
