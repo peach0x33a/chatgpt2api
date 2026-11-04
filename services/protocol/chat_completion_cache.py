@@ -81,7 +81,8 @@ def _message_signature(message: dict[str, Any]) -> str:
 
 def normalize_text_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     settings = config.get_chat_completion_cache_settings()
-    if not settings.get("normalize_messages"):
+    # 这两条规则只为提高缓存命中率而改写用户原文；关闭缓存后不该再动上下文。
+    if not settings.get("enabled") or not settings.get("normalize_messages"):
         return messages
 
     normalized: list[dict[str, Any]] = []
@@ -122,6 +123,22 @@ class ChatCompletionCache:
     @staticmethod
     def _copy(value: Any) -> Any:
         return copy.deepcopy(value)
+
+    @classmethod
+    def _for_store(cls, value: Any) -> Any:
+        """落缓存前剥掉账号溯源字段。
+
+        账号是本轮实际调用的结果，复用缓存时账号已经不同，留着会张冠李戴。
+        """
+        if isinstance(value, dict):
+            return {
+                key: cls._for_store(item)
+                for key, item in value.items()
+                if key != "_account_email"
+            }
+        if isinstance(value, list):
+            return [cls._for_store(item) for item in value]
+        return cls._copy(value)
 
     def get_or_compute_response(self, key: str, compute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         settings = self._settings()
@@ -165,11 +182,11 @@ class ChatCompletionCache:
 
         expires_at = time.time() + int(settings.get("ttl_seconds") or 0)
         with self._lock:
-            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._copy(value))
+            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._for_store(value))
             self._prune_locked(time.time(), max_entries)
             self._inflight.pop(key, None)
         with inflight.condition:
-            inflight.value = self._copy(value)
+            inflight.value = self._for_store(value)
             inflight.done = True
             inflight.condition.notify_all()
         return value
@@ -226,11 +243,11 @@ class ChatCompletionCache:
 
         expires_at = time.time() + int(settings.get("ttl_seconds") or 0)
         with self._lock:
-            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._copy(chunks))
+            self._entries[key] = CacheEntry(expires_at=expires_at, value=self._for_store(chunks))
             self._prune_locked(time.time(), max_entries)
             self._inflight.pop(key, None)
         with inflight.condition:
-            inflight.value = self._copy(chunks)
+            inflight.value = self._for_store(chunks)
             inflight.done = True
             inflight.condition.notify_all()
 

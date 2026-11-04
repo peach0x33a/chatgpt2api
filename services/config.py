@@ -38,7 +38,7 @@ DEFAULT_IMAGE_STORAGE = {
 }
 
 DEFAULT_CHAT_COMPLETION_CACHE = {
-    "enabled": True,
+    "enabled": False,
     "ttl_seconds": 60,
     "max_entries": 256,
     "dedupe_inflight": True,

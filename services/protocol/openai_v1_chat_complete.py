@@ -82,6 +82,7 @@ def completion_response(
     created: int | None = None,
     messages: list[dict[str, Any]] | None = None,
     annotations: list[dict[str, Any]] | None = None,
+    account_email: str = "",
 ) -> dict[str, Any]:
     prompt_text_tokens = count_message_text_tokens(messages, model) if messages else 0
     prompt_image_tokens = count_message_image_tokens(messages, model) if messages else 0
@@ -90,7 +91,7 @@ def completion_response(
     message = {"role": "assistant", "content": content}
     if annotations:
         message["annotations"] = annotations
-    return {
+    response = {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": created or int(time.time()),
@@ -116,6 +117,9 @@ def completion_response(
             },
         },
     }
+    if account_email:
+        response["_account_email"] = account_email
+    return response
 
 
 def stream_text_chat_completion(
@@ -136,7 +140,11 @@ def stream_text_chat_completion(
             yield completion_chunk(model, {"content": delta_text}, None, completion_id, created)
     if not sent_role:
         yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
-    yield completion_chunk(model, {}, "stop", completion_id, created)
+    # 收尾帧带上账号，供日志溯源；缓存回放时会剥掉，避免张冠李戴。
+    stop = completion_chunk(model, {}, "stop", completion_id, created)
+    if request.account_email:
+        stop["_account_email"] = request.account_email
+    yield stop
 
 
 def collect_chat_content(chunks: Iterable[dict[str, Any]]) -> str:
@@ -202,12 +210,14 @@ def web_search_chat_response(messages: list[dict[str, Any]], model: str) -> dict
     query = search_query_from_messages(messages)
     if not query:
         raise HTTPException(status_code=400, detail={"error": "messages or prompt is required for web search"})
-    text, annotations = text_with_url_citations(run_web_search(query))
+    result = run_web_search(query)
+    text, annotations = text_with_url_citations(result)
     return completion_response(
         model,
         text,
         messages=messages,
         annotations=chat_completion_annotations(annotations),
+        account_email=str(result.get("_account_email") or ""),
     )
 
 
@@ -215,11 +225,16 @@ def stream_web_search_chat_completion(messages: list[dict[str, Any]], model: str
     query = search_query_from_messages(messages)
     if not query:
         raise HTTPException(status_code=400, detail={"error": "messages or prompt is required for web search"})
-    text, _annotations = text_with_url_citations(run_web_search(query))
+    result = run_web_search(query)
+    text, _annotations = text_with_url_citations(result)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     yield completion_chunk(model, {"role": "assistant", "content": text}, None, completion_id, created)
-    yield completion_chunk(model, {}, "stop", completion_id, created)
+    stop = completion_chunk(model, {}, "stop", completion_id, created)
+    stop["_account_email"] = str(result.get("_account_email") or "") if isinstance(result, dict) else ""
+    if not stop["_account_email"]:
+        stop.pop("_account_email")
+    yield stop
 
 
 def image_result_content(result: dict[str, Any]) -> str:
@@ -305,12 +320,14 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     if is_web_search_chat_request(body) and not has_unsupported_tools(body, WEB_SEARCH_TOOL_TYPES):
         return web_search_chat_response(messages, model)
     thinking_effort = thinking_effort_from_body(body)
+    request = ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)
     key = cache_key(body, messages, stream=False)
     return chat_completion_cache.get_or_compute_response(
         key,
         lambda: completion_response(
             model,
-            collect_text(text_backend(model), ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)),
+            collect_text(text_backend(model), request),
             messages=messages,
+            account_email=request.account_email,
         ),
     )

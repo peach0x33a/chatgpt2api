@@ -268,6 +268,7 @@ def response_completed(
     created: int,
     output: list[dict[str, Any]],
     usage: dict[str, Any] | None = None,
+    account_email: str = "",
 ) -> dict[str, Any]:
     response = {
         "type": "response.completed",
@@ -285,6 +286,9 @@ def response_completed(
     }
     if usage:
         response["response"]["usage"] = usage
+    # 账号只供日志溯源，对外会被 log_service 剥掉。
+    if account_email:
+        response["_account_email"] = account_email
     return response
 
 
@@ -318,7 +322,7 @@ def stream_text_response(backend, body: dict[str, Any], messages: list[dict[str,
         input_image_tokens=count_message_image_tokens(messages, model),
         output_text_tokens=count_text_tokens(full_text, model),
     )
-    yield response_completed(response_id, model, created, [item], usage)
+    yield response_completed(response_id, model, created, [item], usage, account_email=request.account_email)
 
 
 def stream_web_search_response(body: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
@@ -356,7 +360,14 @@ def stream_web_search_response(body: dict[str, Any], messages: list[dict[str, An
         input_image_tokens=count_message_image_tokens(messages, model),
         output_text_tokens=count_text_tokens(text, model),
     )
-    yield response_completed(response_id, model, created, [search_item, message_item], usage)
+    yield response_completed(
+        response_id,
+        model,
+        created,
+        [search_item, message_item],
+        usage,
+        account_email=str(result.get("_account_email") or ""),
+    )
 
 
 def stream_image_response(
@@ -402,11 +413,17 @@ def stream_image_response(
 
 def collect_response(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
     completed = {}
+    account_email = ""
     for event in events:
         if event.get("type") == "response.completed":
             completed = event.get("response") if isinstance(event.get("response"), dict) else {}
+            account_email = str(event.get("_account_email") or "") or account_email
     if not completed:
         raise RuntimeError("response generation failed")
+    # 非流式会把 response.completed 的 response 直接返回给调用方，
+    # 账号要跟着 lift 上来，否则 /v1/responses 的日志仍然没有账号。
+    if account_email:
+        completed = {**completed, "_account_email": account_email}
     return completed
 
 

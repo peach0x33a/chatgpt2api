@@ -307,6 +307,9 @@ class ConversationRequest:
     base_url: str | None = None
     message_as_error: bool = False
     progress_callback: Any = None  # Callable[[str], None] | None
+    # 文字链路实际使用的账号邮箱，由 stream_text_deltas 在取号后回填，
+    # 供协议层写进 _account_email 让日志能溯源。
+    account_email: str = ""
 
 
 @dataclass
@@ -722,6 +725,9 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
         active_backend = None
         try:
             active_backend = OpenAIBackendAPI(access_token=token)
+            if token:
+                account = account_service.get_account(token) or {}
+                request.account_email = str(account.get("email") or "").strip()
             for event in conversation_events(
                 active_backend,
                 messages=request.messages,

@@ -333,7 +333,8 @@ def create_internal_router() -> APIRouter:
             return _error_response(exc)
         text = _extract_text(response)
         usage = _extract_usage(response)
-        call.log("调用完成", {"usage": usage})
+        email = str(response.get("_account_email") or "") if isinstance(response, dict) else ""
+        call.log("调用完成", {"usage": usage, "_account_email": email})
         return {"text": text, "usage": usage}
 
     @router.post("/internal/v1/images/resume")
@@ -477,8 +478,9 @@ def _stream_text_response(model: str, messages: list[dict[str, Any]], thinking_e
 
     def generate() -> Iterator[str]:
         try:
-            events = openai_v1_chat_complete.handle(payload)
-            for event in events:
+            # 内部文本流由 Go 消费，不写调用日志，所以这里无需回传账号；
+            # 账号溯源只作用于对外 /v1/* 链路（见 log_service.LoggedCall）。
+            for event in openai_v1_chat_complete.handle(payload):
                 for text in _iter_chunk_text(event):
                     yield _sse({"type": "delta", "text": text})
         except Exception as exc:  # noqa: BLE001

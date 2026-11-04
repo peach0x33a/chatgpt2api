@@ -151,9 +151,10 @@ def _preprocess_block(block: object, text_mapper: Callable[[str], str]) -> objec
     return block
 
 
-def message_response(model: str, text: str, input_tokens: int, output_tokens: int, tools: object = None) -> dict[str, object]:
+def message_response(model: str, text: str, input_tokens: int, output_tokens: int, tools: object = None,
+                     account_email: str = "") -> dict[str, object]:
     content, stop_reason = content_blocks(text, tools)
-    return {
+    response = {
         "id": f"msg_{uuid.uuid4()}",
         "type": "message",
         "role": "assistant",
@@ -163,6 +164,9 @@ def message_response(model: str, text: str, input_tokens: int, output_tokens: in
         "stop_sequence": None,
         "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
     }
+    if account_email:
+        response["_account_email"] = account_email
+    return response
 
 
 def content_blocks(text: str, tools: object = None) -> tuple[list[dict[str, object]], str]:
@@ -230,11 +234,13 @@ def stream_events(chunks: Iterable[dict[str, object]], model: str, input_tokens:
     tool_mode = isinstance(tools, list) and bool(tools)
     tool_started = False
     text_open = False
+    account_email = ""
     yield {"type": "message_start", "message": {"id": message_id, "type": "message", "role": "assistant", "model": model, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": input_tokens, "output_tokens": 0}}}
     if not tool_mode:
         text_open = True
         yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
     for chunk in chunks:
+        account_email = str(chunk.get("_account_email") or "") or account_email
         choice = (chunk.get("choices") or [{}])[0]
         delta = choice.get("delta") or {}
         text_delta = delta.get("content", "") if isinstance(delta, dict) else ""
@@ -270,7 +276,12 @@ def stream_events(chunks: Iterable[dict[str, object]], model: str, input_tokens:
                 yield from _stream_buffered_blocks(content, start_index)
             yield {"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": None}, "usage": {"output_tokens": output_tokens(current_text)}}
             break
-    yield {"type": "message_stop", "created": created}
+    stop_event = {"type": "message_stop", "created": created}
+    # 账号只供日志溯源：OpenAI 链路把 _account_email 挂在收尾帧上，
+    # 这里从消费过的 chunk 里取回，随 message_stop 一并交给 log_service。
+    if account_email:
+        stop_event["_account_email"] = account_email
+    yield stop_event
 
 
 def _stream_buffered_blocks(content: list[dict[str, object]], start_index: int = 0) -> Iterator[dict[str, object]]:
@@ -297,11 +308,14 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
             lambda text: count_text_tokens(text, request.model),
             request.tools,
         )
-    text = collect_chat_content(stream_text_chat_completion(request.backend, request.messages, request.model))
+    chunks = list(stream_text_chat_completion(request.backend, request.messages, request.model))
+    text = collect_chat_content(chunks)
+    account_email = str(chunks[-1].get("_account_email") or "") if chunks else ""
     return message_response(
         request.model,
         text,
         count_message_tokens(request.messages, request.model),
         count_text_tokens(text, request.model),
         request.tools,
+        account_email=account_email,
     )
