@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.5 - 2026-11-04
+
++ [优化] 镜像瘦身：依赖编译拆到独立阶段，`gcc` / `libpq-dev` 与 uv 缓存不再进入运行镜像；清理 git 自带的 doc/man；运行期改用虚拟环境里的 python 启动。本地解压体积 665MB → 330MB。
++ [修复] 补全 `.dockerignore`：`data/`（账号凭证、日志、图片）、`test/`、`docs/`、`.github/`、`CHANGELOG.md` 等此前都会进构建上下文，现全部排除，context 从 295MB 降到 2.6MB。
+
 ## 1.9.4 - 2026-11-04
 
 + [调整] 文本补全缓存默认关闭（`chat_completion_cache.enabled=false`）。缓存除了回放旧答案，还会改写上下文（合并相邻重复消息），排查问题时容易误判成「模型记住了上一次」；需要时可在设置里重新打开。
