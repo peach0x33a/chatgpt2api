@@ -176,6 +176,24 @@ export async function toggleAccountMemory(accessToken: string, enabled: boolean)
     );
 }
 
+/**
+ * 导出账号凭证。
+ *
+ * 后端要求账号同时具备 access_token / refresh_token / id_token，缺一个就跳过；
+ * 所以传空数组表示「导出全部可导出的账号」，而不是真的一个都不导。
+ * 文件名由后端在 Content-Disposition 里给，这里只兜底。
+ */
+export async function exportAccounts(accessTokens: string[], format: "json" | "zip" = "json") {
+    const response = await request.post(
+        "/api/accounts/export",
+        { access_tokens: accessTokens, format },
+        { responseType: "blob" },
+    );
+    const disposition = String(response.headers["content-disposition"] || "");
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    saveBlob(response.data as Blob, match?.[1] || `codex-accounts.${format}`);
+}
+
 export async function refreshAccounts(accessTokens: string[]) {
     return httpRequest<{ progress_id: string }>("/api/accounts/refresh", {
         method: "POST",

@@ -10,6 +10,7 @@ import AppButton from "@/components/ui/AppButton.vue";
 import AppSelect from "@/components/ui/AppSelect.vue";
 import {
     deleteAccounts,
+    exportAccounts,
     fetchAccounts,
     fetchReLoginProgress,
     fetchRefreshProgress,
@@ -31,6 +32,10 @@ const STATUS_OPTIONS = [
     { value: "禁用", label: "禁用" },
 ];
 
+const EXPORT_FORMAT_OPTIONS = [
+    { value: "json", label: "JSON" },
+    { value: "zip", label: "ZIP" },
+];
 
 const accounts = ref<Account[]>([]);
 const loading = ref(false);
@@ -47,6 +52,9 @@ const memoryAccount = ref<Account | null>(null);
 
 const progress = ref<RefreshProgressResponse | null>(null);
 const progressLabel = ref("");
+/** 导出格式；选中账号时导出选中项，否则导出全池。 */
+const exportFormat = ref<"json" | "zip">("json");
+const exporting = ref(false);
 
 const filtered = computed(() => {
     const text = keyword.value.trim().toLowerCase();
@@ -180,6 +188,22 @@ async function pollProgress(
     }
 }
 
+async function doExport() {
+    if (exporting.value) {
+        return;
+    }
+    const targets = [...selected.value];
+    exporting.value = true;
+    try {
+        await exportAccounts(targets, exportFormat.value);
+        toast.success(targets.length > 0 ? `已导出 ${targets.length} 个账号` : "已导出全部可导出的账号");
+    } catch (error) {
+        toast.error(error instanceof Error ? error.message : "导出失败");
+    } finally {
+        exporting.value = false;
+    }
+}
+
 async function doDelete() {
     const targets = [...selected.value];
     if (targets.length === 0) {
@@ -276,6 +300,18 @@ async function doDelete() {
                     class="h-8 w-52 rounded-sm border border-border bg-bg px-3 text-sm text-ink outline-none transition-colors duration-150 placeholder:text-muted/70 focus:border-ink"
                 />
                 <AppSelect v-model="statusFilter" :options="STATUS_OPTIONS" size="sm" width="6.5rem" />
+                <div class="flex items-center gap-1.5">
+                    <span class="meta-xs">导出为</span>
+                    <AppSelect
+                        v-model="exportFormat"
+                        :options="EXPORT_FORMAT_OPTIONS"
+                        size="sm"
+                        width="5rem"
+                    />
+                    <button class="bracket-button" :disabled="exporting" @click="doExport">
+                        [导出{{ selected.size > 0 ? `已选 ${selected.size}` : "全部" }}]
+                    </button>
+                </div>
                 <button class="bracket-button" :disabled="loading" @click="load">[刷新列表]</button>
             </div>
         </div>
